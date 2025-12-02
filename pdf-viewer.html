@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式PDF查看器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #525659;
+            overflow: hidden;
+        }
+
+        .toolbar {
+            background: #323639;
+            color: white;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            flex-wrap: wrap;
+        }
+
+        .toolbar button {
+            background: #474b4f;
+            color: white;
+            border: 1px solid #5a5f63;
+            padding: 6px 12px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .toolbar button:hover:not(:disabled) {
+            background: #5a5f63;
+        }
+
+        .toolbar button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .toolbar input[type="number"] {
+            width: 60px;
+            padding: 6px;
+            border: 1px solid #5a5f63;
+            background: #474b4f;
+            color: white;
+            border-radius: 3px;
+            text-align: center;
+        }
+
+        .toolbar select {
+            background: #474b4f;
+            color: white;
+            border: 1px solid #5a5f63;
+            padding: 6px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .toolbar .separator {
+            width: 1px;
+            height: 24px;
+            background: #5a5f63;
+            margin: 0 4px;
+        }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .container {
+            display: flex;
+            height: calc(100vh - 56px);
+        }
+
+        .sidebar {
+            width: 200px;
+            background: #3d4143;
+            overflow-y: auto;
+            border-right: 1px solid #2a2c2e;
+            display: none;
+        }
+
+        .sidebar.active {
+            display: block;
+        }
+
+        .thumbnail {
+            padding: 8px;
+            cursor: pointer;
+            border-bottom: 1px solid #2a2c2e;
+            transition: background 0.2s;
+        }
+
+        .thumbnail:hover {
+            background: #474b4f;
+        }
+
+        .thumbnail.active {
+            background: #474b4f;
+            border-left: 3px solid #0a84ff;
+        }
+
+        .thumbnail canvas {
+            width: 100%;
+            border: 1px solid #5a5f63;
+        }
+
+        .thumbnail-label {
+            color: #ccc;
+            font-size: 12px;
+            text-align: center;
+            margin-top: 4px;
+        }
+
+        .viewer {
+            flex: 1;
+            overflow: auto;
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        #canvas-container {
+            background: white;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            margin: 0 auto;
+        }
+
+        #pdf-canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            background: rgba(0,0,0,0.8);
+            padding: 20px 40px;
+            border-radius: 8px;
+            z-index: 1000;
+        }
+
+        .search-box {
+            display: none;
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            background: #323639;
+            padding: 12px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            z-index: 100;
+        }
+
+        .search-box.active {
+            display: block;
+        }
+
+        .search-box input {
+            padding: 8px;
+            border: 1px solid #5a5f63;
+            background: #474b4f;
+            color: white;
+            border-radius: 3px;
+            width: 250px;
+        }
+
+        .search-results {
+            color: #ccc;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .toolbar {
+                padding: 6px 8px;
+                gap: 6px;
+            }
+
+            .toolbar button {
+                padding: 4px 8px;
+                font-size: 12px;
+            }
+
+            .sidebar {
+                width: 150px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <button id="toggle-sidebar" title="缩略图">☰</button>
+            <div class="separator"></div>
+            <button id="prev-page" title="上一页">◀</button>
+            <input type="number" id="page-num" min="1" value="1">
+            <span id="page-info">/ 1</span>
+            <button id="next-page" title="下一页">▶</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button id="zoom-out" title="缩小">-</button>
+            <select id="zoom-select">
+                <option value="auto">自动</option>
+                <option value="page-fit">适应页面</option>
+                <option value="page-width">适应宽度</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1" selected>100%</option>
+                <option value="1.25">125%</option>
+                <option value="1.5">150%</option>
+                <option value="2">200%</option>
+                <option value="3">300%</option>
+            </select>
+            <button id="zoom-in" title="放大">+</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button id="rotate-left" title="逆时针旋转">↶</button>
+            <button id="rotate-right" title="顺时针旋转">↷</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button id="search-btn" title="搜索">🔍</button>
+            <button id="fullscreen" title="全屏">⛶</button>
+            <button id="download" title="下载">⬇</button>
+        </div>
+    </div>
+
+    <div class="search-box" id="search-box">
+        <input type="text" id="search-input" placeholder="搜索文本...">
+        <button id="search-prev">⬆</button>
+        <button id="search-next">⬇</button>
+        <button id="close-search">✕</button>
+        <div class="search-results" id="search-results"></div>
+    </div>
+
+    <div class="container">
+        <div class="sidebar" id="sidebar"></div>
+        <div class="viewer">
+            <div id="canvas-container">
+                <canvas id="pdf-canvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading" id="loading">加载中...</div>
+
+    <script>
+        // 设置PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+        let scale = 1;
+        let rotation = 0;
+        const canvas = document.getElementById('pdf-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 加载PDF
+        const url = 'Untitled (1).pdf';
+
+        pdfjsLib.getDocument(url).promise.then(pdf => {
+            pdfDoc = pdf;
+            document.getElementById('page-info').textContent = `/ ${pdf.numPages}`;
+            document.getElementById('page-num').max = pdf.numPages;
+            document.getElementById('loading').style.display = 'none';
+
+            renderPage(pageNum);
+            generateThumbnails();
+        }).catch(error => {
+            console.error('加载PDF失败:', error);
+            document.getElementById('loading').textContent = '加载失败: ' + error.message;
+        });
+
+        // 渲染页面
+        function renderPage(num) {
+            pageRendering = true;
+
+            pdfDoc.getPage(num).then(page => {
+                const viewport = page.getViewport({scale: scale, rotation: rotation});
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+
+                const renderTask = page.render(renderContext);
+
+                renderTask.promise.then(() => {
+                    pageRendering = false;
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+
+            document.getElementById('page-num').value = num;
+            updateActiveThumb nail(num);
+        }
+
+        // 队列渲染
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        // 上一页
+        document.getElementById('prev-page').addEventListener('click', () => {
+            if (pageNum <= 1) return;
+            pageNum--;
+            queueRenderPage(pageNum);
+        });
+
+        // 下一页
+        document.getElementById('next-page').addEventListener('click', () => {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            queueRenderPage(pageNum);
+        });
+
+        // 页码输入
+        document.getElementById('page-num').addEventListener('change', (e) => {
+            let num = parseInt(e.target.value);
+            if (num > 0 && num <= pdfDoc.numPages) {
+                pageNum = num;
+                queueRenderPage(pageNum);
+            } else {
+                e.target.value = pageNum;
+            }
+        });
+
+        // 缩放
+        document.getElementById('zoom-out').addEventListener('click', () => {
+            scale = Math.max(0.25, scale - 0.25);
+            document.getElementById('zoom-select').value = scale;
+            queueRenderPage(pageNum);
+        });
+
+        document.getElementById('zoom-in').addEventListener('click', () => {
+            scale = Math.min(5, scale + 0.25);
+            document.getElementById('zoom-select').value = scale;
+            queueRenderPage(pageNum);
+        });
+
+        document.getElementById('zoom-select').addEventListener('change', (e) => {
+            const value = e.target.value;
+            if (value === 'auto' || value === 'page-fit' || value === 'page-width') {
+                // 简化实现，设置为1
+                scale = 1;
+            } else {
+                scale = parseFloat(value);
+            }
+            queueRenderPage(pageNum);
+        });
+
+        // 旋转
+        document.getElementById('rotate-left').addEventListener('click', () => {
+            rotation = (rotation - 90) % 360;
+            queueRenderPage(pageNum);
+        });
+
+        document.getElementById('rotate-right').addEventListener('click', () => {
+            rotation = (rotation + 90) % 360;
+            queueRenderPage(pageNum);
+        });
+
+        // 侧边栏
+        document.getElementById('toggle-sidebar').addEventListener('click', () => {
+            document.getElementById('sidebar').classList.toggle('active');
+        });
+
+        // 生成缩略图
+        function generateThumbnails() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.innerHTML = '';
+
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                const thumbDiv = document.createElement('div');
+                thumbDiv.className = 'thumbnail';
+                thumbDiv.dataset.page = i;
+
+                const thumbCanvas = document.createElement('canvas');
+                const thumbLabel = document.createElement('div');
+                thumbLabel.className = 'thumbnail-label';
+                thumbLabel.textContent = `页 ${i}`;
+
+                thumbDiv.appendChild(thumbCanvas);
+                thumbDiv.appendChild(thumbLabel);
+                sidebar.appendChild(thumbDiv);
+
+                // 渲染缩略图
+                pdfDoc.getPage(i).then(page => {
+                    const viewport = page.getViewport({scale: 0.2});
+                    thumbCanvas.height = viewport.height;
+                    thumbCanvas.width = viewport.width;
+
+                    page.render({
+                        canvasContext: thumbCanvas.getContext('2d'),
+                        viewport: viewport
+                    });
+                });
+
+                // 点击缩略图跳转
+                thumbDiv.addEventListener('click', () => {
+                    pageNum = parseInt(thumbDiv.dataset.page);
+                    queueRenderPage(pageNum);
+                });
+            }
+        }
+
+        // 更新活动缩略图
+        function updateActiveThumbnail(num) {
+            document.querySelectorAll('.thumbnail').forEach(thumb => {
+                thumb.classList.remove('active');
+            });
+            const activeThumb = document.querySelector(`.thumbnail[data-page="${num}"]`);
+            if (activeThumb) {
+                activeThumb.classList.add('active');
+            }
+        }
+
+        // 搜索
+        document.getElementById('search-btn').addEventListener('click', () => {
+            document.getElementById('search-box').classList.toggle('active');
+            if (document.getElementById('search-box').classList.contains('active')) {
+                document.getElementById('search-input').focus();
+            }
+        });
+
+        document.getElementById('close-search').addEventListener('click', () => {
+            document.getElementById('search-box').classList.remove('active');
+        });
+
+        // 全屏
+        document.getElementById('fullscreen').addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        });
+
+        // 下载
+        document.getElementById('download').addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'Untitled (1).pdf';
+            link.click();
+        });
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'f') {
+                e.preventDefault();
+                document.getElementById('search-box').classList.add('active');
+                document.getElementById('search-input').focus();
+            }
+            if (e.key === 'ArrowLeft') {
+                document.getElementById('prev-page').click();
+            }
+            if (e.key === 'ArrowRight') {
+                document.getElementById('next-page').click();
+            }
+            if (e.key === 'Escape') {
+                document.getElementById('search-box').classList.remove('active');
+            }
+        });
+    </script>
+</body>
+</html>
